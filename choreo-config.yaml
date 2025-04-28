@@ -1,0 +1,15 @@
+component:
+  name: threads-downloader
+  type: service
+  build:
+    context: .
+    dockerfile: Dockerfile
+  ports:
+    - containerPort: 8080
+  env:
+    - name: DEBUG
+      value: "false"
+    - name: TIMEOUT
+      value: "10.0"
+    - name: ALLOWED_ORIGINS
+      value: "*"
