@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 from bs4 import BeautifulSoup
@@ -7,31 +7,52 @@ import logging
 from tenacity import retry, stop_after_attempt, wait_exponential
 from pydantic import BaseModel
 from urllib.parse import urlparse
+import os
+
+# Configuration
+class Settings(BaseModel):
+    app_name: str = "Threads Downloader API"
+    app_version: str = "1.1.0"
+    debug: bool = os.getenv("DEBUG", "false").lower() == "true"
+    timeout: float = float(os.getenv("TIMEOUT", "10.0"))
+    allowed_origins: list = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+
+settings = Settings()
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+    ]
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Threads Downloader API", version="1.1.0")
+# Initialize FastAPI
+app = FastAPI(
+    title=settings.app_name,
+    version=settings.app_version,
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
 
-# Configure CORS for aniapi.online
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://aniapi.online", "http://aniapi.online"],
+    allow_origins=settings.allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
 )
 
 # Constants
-TIMEOUT = 10.0
+TIMEOUT = settings.timeout
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 THREADSTER_BASE_URL = "https://threadster.app/download/{thread_id}"
 ID_PATTERN = re.compile(r"/post/([A-Za-z0-9_-]+)")
 
+# Models
 class ThreadResponse(BaseModel):
     ok: bool
     message: str
@@ -40,6 +61,7 @@ class ThreadResponse(BaseModel):
     url: list[str] | None = None
     username: str | None = None
 
+# Helper Functions
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 async def fetch_url(client: httpx.AsyncClient, url: str) -> str:
     try:
@@ -64,6 +86,16 @@ def extract_thread_id(url_or_id: str) -> str | None:
         return None
     return url_or_id.strip()
 
+# Exception Handler
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"ok": False, "message": "Internal server error"},
+    )
+
+# Routes
 @app.get("/download", response_model=ThreadResponse)
 async def download_thread(url_or_id: str):
     thread_id = extract_thread_id(url_or_id)
@@ -130,13 +162,7 @@ async def download_thread(url_or_id: str):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "version": app.version}
+    return {"status": "ok", "version": settings.app_version}
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8000,
-        log_level="info"
-    )
+def get_application() -> FastAPI:
+    return app
